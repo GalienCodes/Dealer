@@ -6,5 +6,5 @@ interface IVeMetisMinter {
 
     function mintFromL1(uint256 amount) external;
 
-    function stake(uint256 amount) external payable;
+    function depositToL1Dealer(uint256 amount) external payable;
 }

@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.9;
 
+import "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "./interface/ICrossDomainEnabled.sol";
-import "./interface/ILockingPool.sol";
-import "./interface/IVeMetisMinter.sol";
-import "./L1Config.sol";
+import "../interface/ILockingPool.sol";
+import "../interface/ILockingInfo.sol";
 
-contract SequencerAgent is ContextUpgradeable, AccessControlUpgradeable {
-    address private owner;
+contract SequencerAgent is ContextUpgradeable {
     address public dealer;
-    L1Config public config;
     ILockingPool public lockingPool;
+    ILockingInfo public lockingInfo;
     IERC20 public metis;
     uint256 public sequencerId;
     address public sequencerSigner;
@@ -24,56 +20,44 @@ contract SequencerAgent is ContextUpgradeable, AccessControlUpgradeable {
         _;
     }
 
-    function initialize(
-        address _lockingPool,
-        address _metis
-    ) external initializer {
-        lockingPool = ILockingPool(_lockingPool);
-        metis = IERC20(_metis);
-        _grantRole(DEFAULT_ADMIN_ROLE, _msgSender());
-    }
-
-    // set dealer contract address
-    function setDealerAddress(
-        address _dealer
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function initialize(address _dealer, ILockingPool _lockingPool, ILockingInfo _lockingInfo, address _metis) external initializer {
         dealer = _dealer;
+        lockingPool = _lockingPool;
+        lockingInfo = _lockingInfo;
+        metis = IERC20(_metis);
     }
 
-    function locked() public view returns (uint256) {
-        return lockingPool.sequencerLock(sequencerId);
-    }
-
-    function lockFor(
-        address _sequencerSigner,
-        uint256 _amount,
-        bytes memory _signerPubKey
-    ) public onlyDealer {
+    function lock(address _sequencerSigner, address _rewardRecipient, uint256 _amount, bytes memory _signerPubKey) public onlyDealer {
         require(sequencerId == 0, "SequencerAgent: sequencer already locked");
-        require(_sequencerSigner != address(0), "SequencerAgent: zero address");
+        require(_sequencerSigner != address(0) && _rewardRecipient != address(0), "SequencerAgent: zero address");
         require(_amount > 0, "SequencerAgent: zero amount");
 
         sequencerSigner = _sequencerSigner;
-        metis.approve(address(lockingPool), _amount);
-        lockingPool.lockFor(sequencerSigner, _amount, _signerPubKey);
-        sequencerId = lockingPool.getSequencerId(sequencerSigner);
+        metis.approve(address(lockingInfo), type(uint256).max);
+        lockingPool.lockWithRewardRecipient(sequencerSigner, _rewardRecipient, _amount, _signerPubKey);
+        sequencerId = lockingPool.seqSigners(sequencerSigner);
         active = true;
     }
 
-    function relock() public onlyDealer returns (uint256 reward) {
-        reward = ILockingPool(lockingPool).sequencerReward(sequencerId);
-        uint amount = IERC20(metis).balanceOf(address(this));
-        metis.approve(address(lockingPool), amount);
-        ILockingPool(lockingPool).relock(sequencerId, amount, true);
+    function relock(uint256 amount) public onlyDealer {
+        lockingPool.relock(sequencerId, amount, true);
     }
 
-    function unlock() public onlyDealer {
-        lockingPool.unlock(sequencerId);
+    function withdrawRewards(uint32 l2Gas) public onlyDealer {
+        lockingPool.withdrawRewards(sequencerId, l2Gas);
+    }
+
+    function sequencerData() public view returns (ILockingPool.SequencerData memory) {
+        return lockingPool.sequencers(sequencerId);
+    }
+
+    function unlock(uint32 l2Gas) public payable onlyDealer {
+        lockingPool.unlock{value: msg.value}(sequencerId, l2Gas);
         active = false;
     }
 
-    function unlockClaim() public onlyDealer {
-        lockingPool.unlockClaim(sequencerId);
+    function unlockClaim(uint32 l2Gas) public payable onlyDealer {
+        lockingPool.unlockClaim{value: msg.value}(sequencerId, l2Gas);
         IERC20(metis).transfer(dealer, IERC20(metis).balanceOf(address(this)));
     }
 }
